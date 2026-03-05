@@ -311,10 +311,13 @@ async function prowlarrSearch(query, searchType = 'search') {
   for (const r of rawResults) {
       let dlUrl = r.downloadUrl || r.magnetUrl || null;
       if (!dlUrl && r.guid && r.guid.startsWith('magnet:')) dlUrl = r.guid;
+      // Preserve magnet URL separately so grab can prefer it over expiring proxy links
+      let magnet = r.magnetUrl || null;
+      if (!magnet && r.guid && r.guid.startsWith('magnet:')) magnet = r.guid;
       allResults.push({
         title: r.title, size: r.size,
         seeders: r.seeders || 0, leechers: r.leechers || 0,
-        indexer: r.indexer, downloadUrl: dlUrl,
+        indexer: r.indexer, downloadUrl: dlUrl, magnetUrl: magnet,
         infoUrl: r.infoUrl || null,
         publishDate: r.publishDate,
         categories: (r.categories || []).map(c => c.id),
@@ -570,7 +573,10 @@ async function plexSearch(title, type, year) {
 // or directly adds to qBittorrent.
 
 async function sendToMediaManager(torrent, title, type) {
-  let url = torrent.downloadUrl;
+  // Prefer magnet URL directly — they never expire (Prowlarr proxy links 410 quickly)
+  let url = (torrent.magnetUrl && torrent.magnetUrl.startsWith('magnet:')) 
+    ? torrent.magnetUrl 
+    : torrent.downloadUrl;
   if (!url) throw new Error('No download URL for selected torrent');
 
   // If the URL is a Prowlarr proxy link (not a direct magnet), resolve the magnet first
