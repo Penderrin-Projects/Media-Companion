@@ -1162,7 +1162,7 @@ async function enrichRequests(requests) {
       if (pipelineJob) {
         const step = pipelineJob.step || '';
         const pStatus = pipelineJob.status || '';
-        if (pStatus === 'complete') return { ...r, live: { pipelineStep: 'In Plex', completed: true, etaToPlex: 0 } };
+        if (pStatus === 'complete' || pStatus === 'done') return { ...r, live: { pipelineStep: 'In Plex', completed: true, etaToPlex: 0 } };
         if (pStatus === 'failed') return { ...r, live: { pipelineStep: 'Failed', completed: false, etaToPlex: 0 } };
 
         if (step === 'grabbing') pipelineStep = 'Starting';
