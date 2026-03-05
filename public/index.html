@@ -760,7 +760,9 @@ async function getMedia(idx, skipPlexCheck = false, tvMode = null, tvSeason = nu
   btn.innerHTML = '<div class="spinner"></div>';
 
   try {
-    const body = { title: r.title, year: r.year, type: r.type, tmdbId: r.id, skipPlexCheck, pushSubscription };
+    const smsPhone = localStorage.getItem('sms_phone') || '';
+    const smsCarrier = localStorage.getItem('sms_carrier') || '';
+    const body = { title: r.title, year: r.year, type: r.type, tmdbId: r.id, skipPlexCheck, pushSubscription, smsPhone, smsCarrier };
   // Re-subscribe if subscription was lost (e.g. after page reload or container restart)
   if (!pushSubscription && Notification.permission === 'granted') {
     try { await subscribePush(); } catch (e) {}
@@ -1430,21 +1432,24 @@ document.querySelectorAll('[data-top-type]').forEach(btn => {
 // ========== SERVICE WORKER ==========
 // ========== SMS NOTIFICATIONS ==========
 function loadSmsSettings() {
-  api('/api/sms/config').then(d => {
-    if (d.phone) document.getElementById('smsPhone').value = d.phone;
-    if (d.carrier) document.getElementById('smsCarrier').value = d.carrier;
-  }).catch(() => {});
+  const phone = localStorage.getItem('sms_phone') || '';
+  const carrier = localStorage.getItem('sms_carrier') || '';
+  if (phone) document.getElementById('smsPhone').value = phone;
+  if (carrier) document.getElementById('smsCarrier').value = carrier;
 }
 function saveSmsSettings() {
   const phone = document.getElementById('smsPhone').value.replace(/\D/g, '');
   const carrier = document.getElementById('smsCarrier').value;
-  api('/api/sms/config', { method: 'POST', body: JSON.stringify({ phone, carrier }) }).catch(() => {});
+  localStorage.setItem('sms_phone', phone);
+  localStorage.setItem('sms_carrier', carrier);
 }
 async function testSms() {
   const status = document.getElementById('smsStatus');
+  const phone = localStorage.getItem('sms_phone') || '';
+  const carrier = localStorage.getItem('sms_carrier') || '';
   status.textContent = 'Sending...';
   try {
-    const d = await api('/api/sms/test', { method: 'POST' });
+    const d = await api('/api/sms/test', { method: 'POST', body: JSON.stringify({ smsPhone: phone, smsCarrier: carrier }) });
     status.textContent = d.success ? '✓ SMS sent!' : '✗ ' + (d.error || 'Failed');
     status.style.color = d.success ? 'var(--accent)' : '#ff6b6b';
   } catch (e) {

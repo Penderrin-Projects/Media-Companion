@@ -17,20 +17,19 @@ function saveSmsConfig(cfg) {
 const SMTP_USER = 'REMOVED_EMAIL';
 const SMTP_PASS = 'REVOKED_APP_PASSWORD';
 
-async function sendSms(message) {
-  const cfg = loadSmsConfig();
-  if (!cfg.phone || !cfg.carrier) return;
+async function sendSms(message, phone, carrier) {
+  if (!phone || !carrier) return;
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
   await transporter.sendMail({
     from: `"Media Manager" <${SMTP_USER}>`,
-    to: `${cfg.phone}@${cfg.carrier}`,
+    to: `${phone}@${carrier}`,
     subject: '',
     text: message,
   });
-  console.log(`[sms] Sent to ${cfg.phone}@${cfg.carrier}`);
+  console.log(`[sms] Sent to ${phone}@${carrier}`);
 }
 
 // Allow self-signed/untrusted HTTPS certs (common on seedbox webUIs)
@@ -682,7 +681,10 @@ app.post('/api/sms/config', requireAuth, (req, res) => {
 
 app.post('/api/sms/test', requireAuth, async (req, res) => {
   try {
-    await sendSms('📺 Test from Media Companion — notifications are working!');
+    const phone = (req.body.smsPhone || '').replace(/\D/g, '');
+    const carrier = req.body.smsCarrier || '';
+    if (!phone || !carrier) return res.json({ success: false, error: 'Phone and carrier required' });
+    await sendSms('📺 Test from Media Companion — notifications are working!', phone, carrier);
     res.json({ success: true });
   } catch (e) {
     res.json({ success: false, error: e.message });
@@ -1041,6 +1043,8 @@ app.post('/api/get', requireAuth, async (req, res) => {
     // Step 4: Log the request
     const requests = loadRequests();
     const pushSubscription = req.body.pushSubscription || null;
+    const smsPhone = (req.body.smsPhone || '').replace(/\D/g, '');
+    const smsCarrier = req.body.smsCarrier || '';
     const newRequest = {
       id: Date.now(),
       title: requestLabel, year, type: contentType,
@@ -1057,6 +1061,8 @@ app.post('/api/get', requireAuth, async (req, res) => {
       timestamp: new Date().toISOString(),
       minPipelineJobId,
       pushSubscription,
+      smsPhone: smsPhone || null,
+      smsCarrier: smsCarrier || null,
     };
     // Remove any existing entry for the same item to avoid duplicates on re-grab
     const deduped = requests.filter(r =>
@@ -1141,7 +1147,7 @@ app.get('/api/requests', requireAuth, async (req, res) => {
           }).then(() => console.log(`[push] Sent notification for: ${r.title}`))
             .catch(e => console.log(`[push] Failed for ${r.title}: ${e.message} (status: ${e.statusCode})`));
         }
-        sendSms(message).catch(e => console.log(`[sms] Failed: ${e.message}`));
+        sendSms(message, r.smsPhone, r.smsCarrier).catch(e => console.log(`[sms] Failed: ${e.message}`));
       }
     }
 
@@ -1406,7 +1412,7 @@ async function checkCompletionsAndNotify() {
         }).then(() => console.log(`[push] Sent notification for: ${r.title}`))
           .catch(e => console.log(`[push] Failed for ${r.title}: ${e.message} (status: ${e.statusCode})`));
       }
-      await sendSms(message).catch(e => console.log(`[sms] Failed: ${e.message}`));
+      await sendSms(message, r.smsPhone, r.smsCarrier).catch(e => console.log(`[sms] Failed: ${e.message}`));
     }
   } catch (e) {
     console.log(`[push-checker] Error: ${e.message}`);
