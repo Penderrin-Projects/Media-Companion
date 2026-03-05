@@ -1255,45 +1255,48 @@ async function showTopInfo(idx) {
   `;
   document.body.appendChild(overlay);
 
-  // Fetch TMDB info
+  // Fetch TMDB info — IMDB ID primary, title+year scoring fallback
   try {
-    const typeParam = type === 'tv' ? '&type=tv' : '';
-    const data = await api(`/api/search?q=${encodeURIComponent(title)}${typeParam}`);
-    if (data.success && data.results && data.results.length) {
-      const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const titleNorm = norm(title);
-      const parsedYear = year ? parseInt(year) : null;
+    let tmdb = null;
 
-      // Score each result: title similarity + year match
-      const scored = data.results.map(x => {
-        const xNorm = norm(x.title || '');
-        const xYear = x.year ? parseInt(x.year) : null;
-        // Title score: exact = 2, starts with = 1, else 0
-        let score = xNorm === titleNorm ? 2 : (xNorm.startsWith(titleNorm) || titleNorm.startsWith(xNorm) ? 1 : 0);
-        // Year score: exact = 2, ±1 = 1, missing = 0, wrong = -1
-        if (parsedYear && xYear) {
-          if (xYear === parsedYear) score += 2;
-          else if (Math.abs(xYear - parsedYear) === 1) score += 1;
-          else score -= 1;
-        }
-        return { x, score };
-      });
+    if (r.imdbId) {
+      const imdbData = await api(`/api/imdb/${r.imdbId}`);
+      if (imdbData.success && imdbData.result) tmdb = imdbData.result;
+    }
 
-      scored.sort((a, b) => b.score - a.score);
-      const tmdb = scored[0].x;
+    if (!tmdb) {
+      const typeParam = type === 'tv' ? '&type=tv' : '';
+      const data = await api(`/api/search?q=${encodeURIComponent(title)}${typeParam}`);
+      if (data.success && data.results && data.results.length) {
+        const norm = s => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const titleNorm = norm(title);
+        const parsedYear = year ? parseInt(year) : null;
+        const scored = data.results.map(x => {
+          const xNorm = norm(x.title || '');
+          const xYear = x.year ? parseInt(x.year) : null;
+          let score = xNorm === titleNorm ? 2 : (xNorm.startsWith(titleNorm) || titleNorm.startsWith(xNorm) ? 1 : 0);
+          if (parsedYear && xYear) {
+            if (xYear === parsedYear) score += 2;
+            else if (Math.abs(xYear - parsedYear) === 1) score += 1;
+            else score -= 1;
+          }
+          return { x, score };
+        });
+        scored.sort((a, b) => b.score - a.score);
+        tmdb = scored[0].x;
+      }
+    }
 
+    if (tmdb) {
       const posterWrap = overlay.querySelector('#info-poster-wrap');
       if (tmdb.poster) {
         posterWrap.outerHTML = `<img class="info-sheet-poster" src="${tmdb.poster}" alt="">`;
       } else {
         posterWrap.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:28px;height:28px;color:var(--text-muted)"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>`;
       }
-      // Update title/year in sheet with confirmed TMDB data
       overlay.querySelector('.info-sheet-title').textContent = tmdb.title || title;
       overlay.querySelector('.info-sheet-sub').textContent = `${tmdb.year || year}${(tmdb.year || year) ? ' · ' : ''}${type === 'tv' ? 'TV Show' : 'Movie'}`;
-      if (tmdb.rating && tmdb.rating !== '0.0') {
-        overlay.querySelector('#info-rating').textContent = `★ ${tmdb.rating}`;
-      }
+      if (tmdb.rating && tmdb.rating !== '0.0') overlay.querySelector('#info-rating').textContent = `★ ${tmdb.rating}`;
       overlay.querySelector('#info-overview').textContent = tmdb.overview || 'No description available.';
     } else {
       overlay.querySelector('#info-overview').textContent = 'No TMDB info found.';
