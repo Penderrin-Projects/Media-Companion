@@ -298,8 +298,9 @@
     .top-card {
       display: flex; gap: 12px; padding: 14px;
       background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: var(--radius); position: relative;
+      border-radius: var(--radius); position: relative; cursor: pointer;
     }
+    .top-card:active { background: var(--bg-hover); }
     .top-card-rank {
       font-size: 22px; font-weight: 800; color: var(--text-muted);
       width: 28px; flex-shrink: 0; display: flex; align-items: flex-start;
@@ -338,19 +339,19 @@
     }
     .info-sheet {
       background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: 16px 16px 0 0; width: 100%; max-width: 480px;
-      max-height: 80vh; overflow-y: auto;
+      border-radius: 20px 20px 0 0; width: 100%; max-width: 480px;
+      max-height: 88vh; overflow-y: auto;
       animation: slideUp 0.2s ease; padding-bottom: calc(20px + var(--safe-bottom));
     }
     .info-sheet-poster-row {
       display: flex; gap: 14px; padding: 20px 20px 14px;
     }
     .info-sheet-poster {
-      width: 80px; height: 120px; border-radius: 8px; object-fit: cover; flex-shrink: 0;
+      width: 100px; height: 150px; border-radius: 10px; object-fit: cover; flex-shrink: 0;
       background: var(--bg-hover);
     }
     .info-sheet-poster-placeholder {
-      width: 80px; height: 120px; border-radius: 8px; background: var(--bg-hover);
+      width: 100px; height: 150px; border-radius: 10px; background: var(--bg-hover);
       display: flex; align-items: center; justify-content: center; flex-shrink: 0;
     }
     .info-sheet-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; padding-top: 2px; }
@@ -1197,7 +1198,7 @@ function renderTop(results) {
     return;
   }
   document.getElementById('topResults').innerHTML = '<div class="results">' + results.slice(0, 20).map((r, i) => `
-    <div class="top-card" data-idx="${i}">
+    <div class="top-card" onclick="showTopInfo(${i})">
       <div class="top-card-rank ${i < 3 ? 'top3' : ''}">${i + 1}</div>
       <div class="top-card-body">
         <div class="top-card-title">${escHtml(r.title)}</div>
@@ -1208,7 +1209,6 @@ function renderTop(results) {
         </div>
       </div>
       <div class="top-card-actions">
-        <button class="top-info-btn" onclick="event.stopPropagation(); showTopInfo(${i})">ℹ</button>
         <button class="top-get-btn" id="top-get-${i}" onclick="event.stopPropagation(); grabTop(${i})">Get</button>
       </div>
     </div>
