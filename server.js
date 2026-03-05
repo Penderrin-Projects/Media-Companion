@@ -990,7 +990,7 @@ app.post('/api/get', requireAuth, async (req, res) => {
     // Step 4: Log the request
     const requests = loadRequests();
     const pushSubscription = req.body.pushSubscription || null;
-    requests.unshift({
+    const newRequest = {
       id: Date.now(),
       title: requestLabel, year, type: contentType,
       tvMode: tvMode || null,
@@ -1006,9 +1006,15 @@ app.post('/api/get', requireAuth, async (req, res) => {
       timestamp: new Date().toISOString(),
       minPipelineJobId,
       pushSubscription,
-    });
-    if (requests.length > 100) requests.length = 100;
-    saveRequests(requests);
+    };
+    // Remove any existing entry for the same item to avoid duplicates on re-grab
+    const deduped = requests.filter(r =>
+      !(r.title === requestLabel && r.tvMode === (tvMode || null) &&
+        r.tvSeason === (tvSeason || null) && r.tvEpisode === (tvEpisode || null))
+    );
+    deduped.unshift(newRequest);
+    if (deduped.length > 100) deduped.length = 100;
+    saveRequests(deduped);
 
     res.json({
       success: true,
