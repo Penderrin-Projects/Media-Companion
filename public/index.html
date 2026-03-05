@@ -453,6 +453,18 @@
       <h2 style="font-size:18px;font-weight:700;margin-bottom:16px">Settings</h2>
 
       <div class="settings-section">
+        <div class="settings-label">Notifications</div>
+        <div class="settings-row" style="flex-direction:column;align-items:flex-start;gap:8px">
+          <span style="font-size:13px;color:var(--text-dim)">Get notified when your download is ready in Plex</span>
+          <button id="notifBtn" onclick="requestPushPermission()" style="
+            padding:10px 18px; border-radius:var(--radius); border:1px solid var(--border);
+            background:var(--accent-glow); color:var(--accent); font-size:13px; font-weight:600;
+            cursor:pointer; font-family:inherit; width:100%;
+          ">Enable Notifications</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
         <div class="settings-label">Connection Status</div>
         <div class="settings-row" id="statusRow">
           <span><span class="status-dot unknown" id="statusDot"></span> <span id="statusText">Checking...</span></span>
@@ -587,7 +599,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.add('active');
     if (page === 'requests') startRequestsRefresh();
     else stopRequestsRefresh();
-    if (page === 'settings') loadSettings();
+    if (page === 'settings') { loadSettings(); updateNotifButton(); }
     if (page === 'top') loadTop();
   });
 });
@@ -1382,32 +1394,98 @@ document.querySelectorAll('[data-top-type]').forEach(btn => {
 // ========== SERVICE WORKER ==========
 // ========== PUSH NOTIFICATIONS ==========
 let pushSubscription = null;
+let pushVapidKey = null;
 
 async function initPush() {
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    // iOS Safari (not installed) — show install prompt in settings
+    return;
+  }
+  try {
+    const keyData = await api('/api/push/vapid-public-key');
+    if (keyData.publicKey) pushVapidKey = keyData.publicKey;
+  } catch (e) {}
+
+  // If already granted, subscribe silently
+  if (Notification.permission === 'granted') {
+    await subscribePush();
+  }
+
+  // Update settings page notification button state
+  updateNotifButton();
+}
+
+async function subscribePush() {
+  if (!pushVapidKey) return;
   try {
     const reg = await navigator.serviceWorker.ready;
-    const keyData = await api('/api/push/vapid-public-key');
-    if (!keyData.publicKey) return;
-
-    // Convert base64 public key to Uint8Array
-    const raw = atob(keyData.publicKey.replace(/-/g, '+').replace(/_/g, '/'));
+    const raw = atob(pushVapidKey.replace(/-/g, '+').replace(/_/g, '/'));
     const key = new Uint8Array(raw.split('').map(c => c.charCodeAt(0)));
-
-    // Check existing subscription first
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
-      // Only ask for permission if not already granted/denied
-      if (Notification.permission === 'default') {
-        const perm = await Notification.requestPermission();
-        if (perm !== 'granted') return;
-      }
-      if (Notification.permission !== 'granted') return;
       sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
     }
     pushSubscription = sub.toJSON();
   } catch (e) {
-    console.warn('[push] Could not subscribe:', e);
+    console.warn('[push] Subscribe failed:', e);
+  }
+}
+
+async function requestPushPermission() {
+  // Must be called from a user gesture (button tap)
+  if (!('PushManager' in window)) {
+    // Check if on iOS Safari (not installed)
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    const isStandalone = window.navigator.standalone;
+    if (isIOS && !isStandalone) {
+      showToast('Add to Home Screen first, then enable notifications', 'error');
+    } else {
+      showToast('Push notifications not supported in this browser', 'error');
+    }
+    return;
+  }
+  if (Notification.permission === 'granted') {
+    await subscribePush();
+    updateNotifButton();
+    showToast('Notifications enabled ✓', 'success');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') {
+    await subscribePush();
+    updateNotifButton();
+    showToast('Notifications enabled ✓', 'success');
+  } else {
+    showToast('Notification permission denied', 'error');
+  }
+}
+
+function updateNotifButton() {
+  const btn = document.getElementById('notifBtn');
+  if (!btn) return;
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isStandalone = window.navigator.standalone;
+  const supported = 'PushManager' in window;
+
+  if (isIOS && !isStandalone) {
+    btn.textContent = 'Add to Home Screen First';
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+  } else if (!supported) {
+    btn.textContent = 'Not Supported';
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+  } else if (Notification.permission === 'granted' && pushSubscription) {
+    btn.textContent = 'Notifications On ✓';
+    btn.style.background = 'rgba(63,185,80,0.15)';
+    btn.style.color = 'var(--success)';
+    btn.style.borderColor = 'rgba(63,185,80,0.3)';
+  } else if (Notification.permission === 'denied') {
+    btn.textContent = 'Blocked — Enable in Settings';
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+  } else {
+    btn.textContent = 'Enable Notifications';
   }
 }
 
