@@ -1304,14 +1304,14 @@ async function enrichRequests(requests) {
       let etaToPlex;
 
       if (pipelineStep === 'Downloading' && dlEta > 0) {
-        // qBit is reachable and giving us a live ETA — use it directly
+        // qBit is giving us a live download ETA — total is qBit ETA + post-download work
         etaToPlex = dlEta + postDownloadEstimate;
-        // Update the tracked estimate so if qBit goes away, we have a good baseline
+        // Keep totalEstimate updated so if qBit goes away mid-download we have a good baseline
         track.totalEstimate = etaToPlex;
-        track.startedAt = now;
+        // Do NOT reset startedAt here — that would break the countdown for other steps
       } else {
-        // For all steps (including Downloading when qBit is unreachable),
-        // count down from when we entered the step
+        // For all other steps (Transferring, Renaming, etc.) or when qBit is unreachable,
+        // count down from when we entered this step
         const elapsed = Math.floor((now - track.startedAt) / 1000);
         etaToPlex = Math.max(0, track.totalEstimate - elapsed);
       }
