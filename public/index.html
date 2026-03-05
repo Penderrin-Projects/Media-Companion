@@ -1474,9 +1474,6 @@ function updateNotifButton() {
   }
 
   if (!btn) return;
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const isStandalone = window.navigator.standalone;
-  const supported = 'PushManager' in window;
 
   if (isIOS && !isStandalone) {
     btn.textContent = 'Add to Home Screen First';
