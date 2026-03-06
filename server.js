@@ -14,17 +14,21 @@ function loadSmsConfig() {
 function saveSmsConfig(cfg) {
   fs.writeFileSync(SMS_CONFIG_FILE, JSON.stringify(cfg, null, 2));
 }
-const SMTP_USER = 'REMOVED_EMAIL';
-const SMTP_PASS = 'REVOKED_APP_PASSWORD';
-
 async function sendSms(message, phone, carrier) {
   if (!phone || !carrier) return;
+  const smsCfg = loadSmsConfig();
+  const smtpUser = smsCfg.smtpUser || '';
+  const smtpPass = smsCfg.smtpPass || '';
+  if (!smtpUser || !smtpPass) {
+    console.log('[sms] SMTP credentials not configured — set smtpUser and smtpPass in SMS settings');
+    return;
+  }
   const transporter = nodemailer.createTransport({
     service: 'gmail',
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
+    auth: { user: smtpUser, pass: smtpPass },
   });
   await transporter.sendMail({
-    from: `"Media Manager" <${SMTP_USER}>`,
+    from: `"Media Manager" <${smtpUser}>`,
     to: `${phone}@${carrier}`,
     subject: '',
     text: message,
@@ -73,10 +77,19 @@ function loadConfig() {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const data = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-      return { ...DEFAULT_CONFIG, ...data };
+      // Deep merge with defaults so partial nested configs don't lose default values
+      const merged = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+      for (const section of Object.keys(merged)) {
+        if (data[section] && typeof data[section] === 'object') {
+          Object.assign(merged[section], data[section]);
+        } else if (data[section] !== undefined) {
+          merged[section] = data[section];
+        }
+      }
+      return merged;
     }
   } catch (e) { console.error('[config] Failed to load:', e.message); }
-  return { ...DEFAULT_CONFIG };
+  return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 }
 
 function saveConfig(cfg) {
@@ -676,12 +689,22 @@ app.post('/api/push/subscribe', requireAuth, (req, res) => {
 // ========== SMS ENDPOINTS ==========
 app.get('/api/sms/config', requireAuth, (req, res) => {
   const cfg = loadSmsConfig();
-  res.json({ phone: cfg.phone || '', carrier: cfg.carrier || '' });
+  res.json({
+    phone: cfg.phone || '', carrier: cfg.carrier || '',
+    smtpUser: cfg.smtpUser || '',
+    smtpPass: cfg.smtpPass ? '••••••' : '',
+  });
 });
 
 app.post('/api/sms/config', requireAuth, (req, res) => {
-  const { phone, carrier } = req.body;
-  saveSmsConfig({ phone, carrier });
+  const { phone, carrier, smtpUser, smtpPass } = req.body;
+  const existing = loadSmsConfig();
+  const updated = { ...existing };
+  if (phone !== undefined) updated.phone = phone;
+  if (carrier !== undefined) updated.carrier = carrier;
+  if (smtpUser !== undefined) updated.smtpUser = smtpUser;
+  if (smtpPass !== undefined && smtpPass !== '••••••') updated.smtpPass = smtpPass;
+  saveSmsConfig(updated);
   res.json({ success: true });
 });
 
