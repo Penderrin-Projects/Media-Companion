@@ -2,7 +2,6 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const webpush = require('web-push');
-const nodemailer = require('nodemailer');
 
 // ========== SMS CONFIG ==========
 const SMS_CONFIG_FILE = process.env.CONFIG_DIR
@@ -16,24 +15,19 @@ function saveSmsConfig(cfg) {
 }
 async function sendSms(message, phone, carrier) {
   if (!phone || !carrier) return;
-  const smsCfg = loadSmsConfig();
-  const smtpUser = smsCfg.smtpUser || '';
-  const smtpPass = smsCfg.smtpPass || '';
-  if (!smtpUser || !smtpPass) {
-    console.log('[sms] SMTP credentials not configured — set smtpUser and smtpPass in SMS settings');
-    return;
+  const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
+  try {
+    const r = await fetch(`${managerUrl}/api/sms/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, carrier, message }),
+    });
+    const data = await r.json();
+    if (!data.success) console.log('[sms] Media Manager send failed:', data.error);
+    else console.log(`[sms] Sent via Media Manager to ${phone}@${carrier}`);
+  } catch (e) {
+    console.log('[sms] Could not reach Media Manager for SMS:', e.message);
   }
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: smtpUser, pass: smtpPass },
-  });
-  await transporter.sendMail({
-    from: `"Media Manager" <${smtpUser}>`,
-    to: `${phone}@${carrier}`,
-    subject: '',
-    text: message,
-  });
-  console.log(`[sms] Sent to ${phone}@${carrier}`);
 }
 
 // Allow self-signed/untrusted HTTPS certs (common on seedbox webUIs)
@@ -689,22 +683,15 @@ app.post('/api/push/subscribe', requireAuth, (req, res) => {
 // ========== SMS ENDPOINTS ==========
 app.get('/api/sms/config', requireAuth, (req, res) => {
   const cfg = loadSmsConfig();
-  res.json({
-    phone: cfg.phone || '', carrier: cfg.carrier || '',
-    smtpUser: cfg.smtpUser || '',
-    smtpPass: cfg.smtpPass ? '••••••' : '',
-  });
+  res.json({ phone: cfg.phone || '', carrier: cfg.carrier || '' });
 });
 
 app.post('/api/sms/config', requireAuth, (req, res) => {
-  const { phone, carrier, smtpUser, smtpPass } = req.body;
+  const { phone, carrier } = req.body;
   const existing = loadSmsConfig();
-  const updated = { ...existing };
-  if (phone !== undefined) updated.phone = phone;
-  if (carrier !== undefined) updated.carrier = carrier;
-  if (smtpUser !== undefined) updated.smtpUser = smtpUser;
-  if (smtpPass !== undefined && smtpPass !== '••••••') updated.smtpPass = smtpPass;
-  saveSmsConfig(updated);
+  if (phone !== undefined) existing.phone = phone;
+  if (carrier !== undefined) existing.carrier = carrier;
+  saveSmsConfig(existing);
   res.json({ success: true });
 });
 
@@ -713,10 +700,16 @@ app.post('/api/sms/test', requireAuth, async (req, res) => {
     const phone = (req.body.smsPhone || '').replace(/\D/g, '');
     const carrier = req.body.smsCarrier || '';
     if (!phone || !carrier) return res.json({ success: false, error: 'Phone and carrier required' });
-    await sendSms('📺 Test from Media Companion — notifications are working!', phone, carrier);
-    res.json({ success: true });
+    const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
+    const r = await fetch(`${managerUrl}/api/sms/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone, carrier }),
+    });
+    const data = await r.json();
+    res.json(data);
   } catch (e) {
-    res.json({ success: false, error: e.message });
+    res.json({ success: false, error: 'Could not reach Media Manager: ' + e.message });
   }
 });
 

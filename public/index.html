@@ -468,14 +468,6 @@
       <div class="settings-section">
         <div class="settings-label">SMS Notifications</div>
         <div class="settings-row">
-          <span>Gmail Address</span>
-          <input type="email" id="smtpUser" placeholder="you@gmail.com" style="width:180px;text-align:left" onchange="saveSmsSettings()">
-        </div>
-        <div class="settings-row">
-          <span>App Password</span>
-          <input type="password" id="smtpPass" placeholder="Gmail app password" style="width:180px;text-align:left" onchange="saveSmsSettings()">
-        </div>
-        <div class="settings-row">
           <span>Phone Number</span>
           <input type="tel" id="smsPhone" placeholder="5551234567" style="width:130px;text-align:left" oninput="saveSmsSettings()">
         </div>
@@ -1439,32 +1431,17 @@ document.querySelectorAll('[data-top-type]').forEach(btn => {
 
 // ========== SERVICE WORKER ==========
 // ========== SMS NOTIFICATIONS ==========
-async function loadSmsSettings() {
+function loadSmsSettings() {
   const phone = localStorage.getItem('sms_phone') || '';
   const carrier = localStorage.getItem('sms_carrier') || '';
   if (phone) document.getElementById('smsPhone').value = phone;
   if (carrier) document.getElementById('smsCarrier').value = carrier;
-  // Load SMTP creds from server
-  try {
-    const cfg = await api('/api/sms/config');
-    if (cfg.smtpUser) document.getElementById('smtpUser').value = cfg.smtpUser;
-    if (cfg.smtpPass) document.getElementById('smtpPass').value = cfg.smtpPass;
-    if (cfg.phone) { document.getElementById('smsPhone').value = cfg.phone; localStorage.setItem('sms_phone', cfg.phone); }
-    if (cfg.carrier) { document.getElementById('smsCarrier').value = cfg.carrier; localStorage.setItem('sms_carrier', cfg.carrier); }
-  } catch (e) { /* server unreachable, use localStorage */ }
 }
 function saveSmsSettings() {
   const phone = document.getElementById('smsPhone').value.replace(/\D/g, '');
   const carrier = document.getElementById('smsCarrier').value;
-  const smtpUser = document.getElementById('smtpUser').value.trim();
-  const smtpPass = document.getElementById('smtpPass').value;
   localStorage.setItem('sms_phone', phone);
   localStorage.setItem('sms_carrier', carrier);
-  // Save to server (including SMTP creds)
-  api('/api/sms/config', {
-    method: 'POST',
-    body: JSON.stringify({ phone, carrier, smtpUser, smtpPass: smtpPass === '••••••' ? undefined : smtpPass })
-  }).catch(() => {});
 }
 async function testSms() {
   const status = document.getElementById('smsStatus');
