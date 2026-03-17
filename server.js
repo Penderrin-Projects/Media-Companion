@@ -1002,6 +1002,38 @@ app.post('/api/get', requireAuth, async (req, res) => {
       searchQuery = year ? `${title} ${year}` : title;
     }
 
+    // Step 0c: Direct magnet shortcut (from Top 20 or browse results)
+    if (req.body.magnetUrl && req.body.magnetUrl.startsWith('magnet:')) {
+      console.log('[get] Direct magnet provided, skipping search');
+      const directTorrent = {
+        title: req.body.torrentTitle || title,
+        downloadUrl: req.body.magnetUrl,
+        magnetUrl: req.body.magnetUrl,
+        size: req.body.torrentSize || 0,
+        seeders: req.body.torrentSeeders || 0,
+        indexer: req.body.torrentIndexer || 'direct',
+        categories: contentType === 'tv' ? [5000] : [2000],
+        _score: 999,
+      };
+      const result = await sendToMediaManager(directTorrent, directTorrent.title, contentType);
+      const requests = loadRequests();
+      const smsPhone = (req.body.smsPhone || '').replace(/\D/g, '');
+      const smsCarrier = req.body.smsCarrier || '';
+      const newReq = {
+        id: Date.now(), title: requestLabel, year, type: contentType,
+        torrent: directTorrent.title, size: directTorrent.size,
+        seeders: directTorrent.seeders, indexer: directTorrent.indexer,
+        quality: /2160p|4k/i.test(directTorrent.title) ? '4K' : /1080p/i.test(directTorrent.title) ? '1080p' : '720p',
+        method: result.method, status: 'sent', timestamp: new Date().toISOString(),
+        pushSubscription: req.body.pushSubscription || null,
+        smsPhone: smsPhone || null, smsCarrier: smsCarrier || null,
+      };
+      requests.unshift(newReq);
+      if (requests.length > 100) requests.length = 100;
+      saveRequests(requests);
+      return res.json({ success: true, message: result.message, torrent: { title: directTorrent.title, size: directTorrent.size, seeders: directTorrent.seeders, indexer: directTorrent.indexer } });
+    }
+
     // Step 1: Search Prowlarr for torrents
     let torrents = await prowlarrSearch(searchQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
     console.log(`[get] Searching: "${searchQuery}" => ${torrents.length} results`);
@@ -1145,6 +1177,21 @@ app.post('/api/top/browse', requireAuth, async (req, res) => {
     res.json(data);
   } catch (e) { res.json({ success: false, error: e.message }); }
 });
+
+app.post('/api/top/resolve', requireAuth, async (req, res) => {
+  try {
+    const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
+    const r = await fetch(managerUrl + '/api/prowlarr/resolve-magnet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(60000),
+    });
+    const data = await r.json();
+    res.json(data);
+  } catch (e) { res.json({ success: false, error: e.message }); }
+});
+
 
 app.get('/api/requests', requireAuth, async (req, res) => {
   const requests = loadRequests();

@@ -1229,11 +1229,12 @@ let topCache = {}; // keyed by `${period}-${type}`, values are {results, ts}
 let topResults = []; // current displayed results
 
 async function initTop() {
-  // Load indexers once
   try {
     const data = await api('/api/top/indexers');
     if (data.success && data.indexers && data.indexers.length) {
-      topIndexerId = data.indexers[0].id;
+      // Prefer 1337x for Top 20 (best popular/trending pages)
+      const leet = data.indexers.find(i => i.id === '1337x' || i.name.toLowerCase().includes('1337'));
+      topIndexerId = leet ? leet.id : data.indexers[0].id;
     }
   } catch (e) { console.error('[top] indexers:', e); }
 }
@@ -1398,12 +1399,30 @@ async function grabTop(idx) {
   const type = topType === 'tv' ? 'tv' : 'movie';
 
   try {
+    // Resolve magnet if not already available
+    let magnetUrl = r.downloadUrl;
+    if (!magnetUrl || !magnetUrl.startsWith('magnet:')) {
+      try {
+        const resolveData = await api('/api/top/resolve', {
+          method: 'POST',
+          body: JSON.stringify({ guid: r.guid, title: r.title, infoUrl: r.infoUrl }),
+        });
+        if (resolveData.success && resolveData.downloadUrl) magnetUrl = resolveData.downloadUrl;
+      } catch {}
+    }
+
+    const smsPhone = localStorage.getItem('sms_phone') || '';
+    const smsCarrier = localStorage.getItem('sms_carrier') || '';
     const data = await api('/api/get', {
       method: 'POST',
       body: JSON.stringify({
         title, year, type, skipPlexCheck: false,
-        magnetUrl: r.downloadUrl, torrentTitle: r.title,
-        pushSubscription,
+        magnetUrl, torrentTitle: r.title,
+        torrentSize: r.size, torrentSeeders: r.seeders,
+        torrentIndexer: r.indexer,
+        primaryIndexer: topIndexerId || null,
+        exclusiveIndexer: !!topIndexerId,
+        pushSubscription, smsPhone, smsCarrier,
       }),
     });
 
