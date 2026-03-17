@@ -263,7 +263,7 @@ async function addAndDetect(url, searchName) {
 }
 
 // ========== SEARCH (Hunterr via Media Manager, or direct Prowlarr) ==========
-async function prowlarrSearch(query, searchType = 'search') {
+async function prowlarrSearch(query, searchType = 'search', primaryIndexer = null, exclusiveIndexer = false) {
   const cfg = config.prowlarr;
   const hasProwlarr = cfg.url && cfg.apiKey && cfg.url.includes('prowlarr');
 
@@ -274,7 +274,7 @@ async function prowlarrSearch(query, searchType = 'search') {
     const mmRes = await fetchWithTimeout(managerUrl + '/api/prowlarr/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, primaryIndexer: primaryIndexer || null, exclusiveIndexer: !!exclusiveIndexer }),
     }, 60000);
     if (!mmRes.ok) throw new Error('Search failed: ' + mmRes.status);
     const data = await mmRes.json();
@@ -591,35 +591,35 @@ async function plexSearch(title, type, year) {
 // or directly adds to qBittorrent.
 
 async function sendToMediaManager(torrent, title, type) {
-  // Prefer magnet URL directly — they never expire (Prowlarr proxy links 410 quickly)
+  // Prefer magnet URL directly — they never expire
   let url = (torrent.magnetUrl && torrent.magnetUrl.startsWith('magnet:')) 
     ? torrent.magnetUrl 
     : torrent.downloadUrl;
-  if (!url) throw new Error('No download URL for selected torrent');
 
-  // If the URL is a Prowlarr proxy link (not a direct magnet), resolve the magnet first
-  // Prowlarr proxy links expire quickly, causing 410 errors
-  if (url && !url.startsWith('magnet:')) {
+  // If no URL at all (e.g. ext.to, Hunterr results), or URL is a proxy link — resolve magnet first
+  if (!url || !url.startsWith('magnet:')) {
     try {
       const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
-      console.log(`[get] Resolving magnet for: ${title}`);
-      const resolveRes = await fetch(`${managerUrl}/api/prowlarr/resolve-magnet`, {
+      console.log('[get] Resolving magnet for: ' + title);
+      const resolveRes = await fetch(managerUrl + '/api/prowlarr/resolve-magnet', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: torrent.title, guid: torrent.guid, infoUrl: torrent.infoUrl }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(60000),
       });
       if (resolveRes.ok) {
         const data = await resolveRes.json();
         if (data.success && data.downloadUrl && data.downloadUrl.startsWith('magnet:')) {
-          console.log(`[get] Resolved magnet: ${data.downloadUrl.substring(0, 60)}...`);
+          console.log('[get] Resolved magnet: ' + data.downloadUrl.substring(0, 60) + '...');
           url = data.downloadUrl;
         }
       }
     } catch (e) {
-      console.log(`[get] Magnet resolution failed, using original URL: ${e.message}`);
+      console.log('[get] Magnet resolution failed: ' + e.message);
     }
   }
+
+  if (!url) throw new Error('No download URL — magnet resolution also failed');
 
   // Try the Electron app's auto-grab endpoint (bypasses grab dialog, goes straight to pipeline)
   try {
@@ -1003,7 +1003,7 @@ app.post('/api/get', requireAuth, async (req, res) => {
     }
 
     // Step 1: Search Prowlarr for torrents
-    let torrents = await prowlarrSearch(searchQuery);
+    let torrents = await prowlarrSearch(searchQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
     console.log(`[get] Searching: "${searchQuery}" => ${torrents.length} results`);
 
     // Fallback searches for TV when primary query finds nothing
@@ -1013,7 +1013,7 @@ app.post('/api/get', requireAuth, async (req, res) => {
         const sNum = String(tvSeason).padStart(2, '0');
         const fallbackQuery = `${title} S${sNum}`;
         console.log(`[get] No episode torrent found, trying season pack: "${fallbackQuery}"`);
-        torrents = await prowlarrSearch(fallbackQuery);
+        torrents = await prowlarrSearch(fallbackQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
         if (torrents.length) {
           // Switch to season mode so selectBestTorrent picks a season pack
           tvMode = 'season';
@@ -1024,12 +1024,12 @@ app.post('/api/get', requireAuth, async (req, res) => {
         const sNum = String(tvSeason).padStart(2, '0');
         const fallbackQuery = `${title} S${sNum}`;
         console.log(`[get] No latest episode found, trying season: "${fallbackQuery}"`);
-        torrents = await prowlarrSearch(fallbackQuery);
+        torrents = await prowlarrSearch(fallbackQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
       } else if (tvMode === 'full') {
-        const alt1 = await prowlarrSearch(`${title} complete`);
+        const alt1 = await prowlarrSearch(`${title} complete`, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
         torrents.push(...alt1);
         if (!torrents.length) {
-          const alt2 = await prowlarrSearch(`${title} all seasons`);
+          const alt2 = await prowlarrSearch(`${title} all seasons`, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
           torrents.push(...alt2);
         }
       }
@@ -1038,7 +1038,7 @@ app.post('/api/get', requireAuth, async (req, res) => {
     // If still nothing, try just the show name as a last resort
     if (contentType === 'tv' && !torrents.length) {
       console.log(`[get] Trying bare title: "${title}"`);
-      torrents = await prowlarrSearch(title);
+      torrents = await prowlarrSearch(title, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
     }
 
     if (!torrents.length) return res.status(404).json({ error: 'No torrents found', query: searchQuery });

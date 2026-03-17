@@ -377,6 +377,15 @@
       background: none; color: var(--text-muted); font-size: 13px;
       cursor: pointer; font-family: inherit;
     }
+  
+    .indexer-pills { display: flex; gap: 6px; width: 100%; }
+    .indexer-pill {
+      flex: 1; padding: 10px 0; text-align: center; font-size: 12px; font-weight: 600;
+      border-radius: var(--radius); border: 1px solid var(--border);
+      background: var(--card); color: var(--text-dim); cursor: pointer; transition: all 0.15s;
+    }
+    .indexer-pill.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent); }
+    .indexer-pill:active { transform: scale(0.96); }
   </style>
 </head>
 <body>
@@ -532,6 +541,18 @@
         <div class="settings-row">
           <span>Minimum Seeders</span>
           <input type="number" id="prefMinSeed" min="0" max="100" value="5">
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-label">Preferred Indexer</div>
+        <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:8px">
+          <span style="font-size:13px;color:var(--text-dim)">Choose which tracker to search first</span>
+          <div class="indexer-pills">
+            <div class="indexer-pill" data-idx="1337x" onclick="setIndexer('1337x')">1337x</div>
+            <div class="indexer-pill" data-idx="extto" onclick="setIndexer('extto')">ext.to</div>
+            <div class="indexer-pill" data-idx="nyaa" onclick="setIndexer('nyaa')">Nyaa</div>
+          </div>
         </div>
       </div>
 
@@ -762,7 +783,7 @@ async function getMedia(idx, skipPlexCheck = false, tvMode = null, tvSeason = nu
   try {
     const smsPhone = localStorage.getItem('sms_phone') || '';
     const smsCarrier = localStorage.getItem('sms_carrier') || '';
-    const body = { title: r.title, year: r.year, type: r.type, tmdbId: r.id, skipPlexCheck, pushSubscription, smsPhone, smsCarrier };
+    const body = { title: r.title, year: r.year, type: r.type, tmdbId: r.id, skipPlexCheck, pushSubscription, smsPhone, smsCarrier, primaryIndexer: getIndexer(), exclusiveIndexer: true };
   // Re-subscribe if subscription was lost (e.g. after page reload or container restart)
   if (!pushSubscription && Notification.permission === 'granted') {
     try { await subscribePush(); } catch (e) {}
