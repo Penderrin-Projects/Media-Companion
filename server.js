@@ -35,6 +35,7 @@ async function sendSms(message, phone, carrier) {
 // Allow self-signed/untrusted HTTPS certs (common on seedbox webUIs)
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
+const MANAGER_URL = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
 const app = express();
 app.use(express.json());
 // Serve static files with cache control
@@ -263,88 +264,6 @@ async function addAndDetect(url, searchName) {
 }
 
 // ========== SEARCH (Hunterr via Media Manager, or direct Prowlarr) ==========
-async function prowlarrSearch(query, searchType = 'search', primaryIndexer = null, exclusiveIndexer = false) {
-  const cfg = config.prowlarr;
-  const hasProwlarr = cfg.url && cfg.apiKey && cfg.url.includes('prowlarr');
-
-  if (!hasProwlarr) {
-    // Route through Media Manager -> Hunterr
-    const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
-    console.log('[search] Via Media Manager: "' + query + '"');
-    const mmRes = await fetchWithTimeout(managerUrl + '/api/prowlarr/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, primaryIndexer: primaryIndexer || null, exclusiveIndexer: !!exclusiveIndexer }),
-    }, 60000);
-    if (!mmRes.ok) throw new Error('Search failed: ' + mmRes.status);
-    const data = await mmRes.json();
-    if (!data.success) throw new Error(data.error || 'Search failed');
-    const results = (data.results || []).map(r => ({
-      title: r.title, size: r.size || 0,
-      seeders: r.seeders || 0, leechers: r.leechers || 0,
-      indexer: r.indexer, downloadUrl: r.downloadUrl || null,
-      magnetUrl: r.downloadUrl && r.downloadUrl.startsWith('magnet:') ? r.downloadUrl : null,
-      guid: r.guid || null, infoUrl: r.infoUrl || null,
-      publishDate: r.publishDate || null,
-      categories: r.categories || [],
-      indexerFlags: r.indexerFlags || [],
-    }));
-    console.log('[search] Got ' + results.length + ' results');
-    return results;
-  }
-
-  // Direct Prowlarr API (legacy)
-  const base = cfg.url.replace(/\/$/, '');
-  const headers = { 'X-Api-Key': cfg.apiKey, 'Accept': 'application/json' };
-  const idxRes = await fetch(base + '/api/v1/indexer', { headers });
-  if (!idxRes.ok) throw new Error('Failed to get indexers: ' + idxRes.status);
-  const allIndexers = await idxRes.json();
-  const torrentIndexers = allIndexers.filter(i => i.enable && i.protocol === 'torrent');
-  if (!torrentIndexers.length) throw new Error('No enabled torrent indexers');
-  const leet = torrentIndexers.find(i => i.name.toLowerCase().includes('1337x'));
-  const others = torrentIndexers.filter(i => !i.name.toLowerCase().includes('1337x'));
-  const primaryIndexers = leet ? [leet] : torrentIndexers;
-  const searchIndexers = async (indexers) => {
-    const searches = indexers.map(async (idx) => {
-      try {
-        const url = base + '/api/v1/search?query=' + encodeURIComponent(query) + '&indexerIds=' + idx.id + '&type=' + searchType;
-        const res = await fetch(url, { headers });
-        if (!res.ok) { console.log('[prowlarr] ' + idx.name + ': HTTP ' + res.status); return []; }
-        const data = await res.json();
-        console.log('[prowlarr] ' + idx.name + ': ' + data.length + ' results');
-        return data;
-      } catch (e) {
-        console.log('[prowlarr] ' + idx.name + ': error - ' + e.message);
-        return [];
-      }
-    });
-    const outcomes = await Promise.all(searches);
-    return outcomes.flat();
-  };
-  console.log('[prowlarr] Searching for "' + query + '" (type: ' + searchType + ')');
-  let rawResults = await searchIndexers(primaryIndexers);
-  if (!rawResults.length && others.length) {
-    console.log('[prowlarr] Primary empty, falling back to: ' + others.map(i => i.name).join(', '));
-    rawResults = await searchIndexers(others);
-  }
-  const allResults = [];
-  for (const r of rawResults) {
-    let dlUrl = r.downloadUrl || r.magnetUrl || null;
-    if (!dlUrl && r.guid && r.guid.startsWith('magnet:')) dlUrl = r.guid;
-    let magnet = r.magnetUrl || null;
-    if (!magnet && r.guid && r.guid.startsWith('magnet:')) magnet = r.guid;
-    allResults.push({
-      title: r.title, size: r.size,
-      seeders: r.seeders || 0, leechers: r.leechers || 0,
-      indexer: r.indexer, downloadUrl: dlUrl, magnetUrl: magnet,
-      infoUrl: r.infoUrl || null, publishDate: r.publishDate,
-      categories: (r.categories || []).map(c => c.id),
-    });
-  }
-  allResults.sort((a, b) => b.seeders - a.seeders);
-  console.log('[search] Total: ' + allResults.length + ' results');
-  return allResults;
-}
 
 // ========== TMDB ==========
 const tmdbCache = new Map();
@@ -590,65 +509,6 @@ async function plexSearch(title, type, year) {
 // Sends the grab to the Electron app's magnet server (if running),
 // or directly adds to qBittorrent.
 
-async function sendToMediaManager(torrent, title, type) {
-  // Prefer magnet URL directly — they never expire
-  let url = (torrent.magnetUrl && torrent.magnetUrl.startsWith('magnet:')) 
-    ? torrent.magnetUrl 
-    : torrent.downloadUrl;
-
-  // If no URL at all (e.g. ext.to, Hunterr results), or URL is a proxy link — resolve magnet first
-  if (!url || !url.startsWith('magnet:')) {
-    try {
-      const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
-      console.log('[get] Resolving magnet for: ' + title);
-      const resolveRes = await fetch(managerUrl + '/api/prowlarr/resolve-magnet', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: torrent.title, guid: torrent.guid, infoUrl: torrent.infoUrl }),
-        signal: AbortSignal.timeout(60000),
-      });
-      if (resolveRes.ok) {
-        const data = await resolveRes.json();
-        if (data.success && data.downloadUrl && data.downloadUrl.startsWith('magnet:')) {
-          console.log('[get] Resolved magnet: ' + data.downloadUrl.substring(0, 60) + '...');
-          url = data.downloadUrl;
-        }
-      }
-    } catch (e) {
-      console.log('[get] Magnet resolution failed: ' + e.message);
-    }
-  }
-
-  if (!url) throw new Error('No download URL — magnet resolution also failed');
-
-  // Try the Electron app's auto-grab endpoint (bypasses grab dialog, goes straight to pipeline)
-  try {
-    const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
-    const mmRes = await fetch(`${managerUrl}/auto-grab`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, title, type: type || 'movie' }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (mmRes.ok) {
-      const data = await mmRes.json();
-      return { method: 'media-manager', message: data.message || `Queued in Media Manager: ${title}` };
-    }
-  } catch {
-    // Media Manager not running — add directly to qBittorrent
-  }
-
-  // Direct fallback: add torrent to qBittorrent (no pipeline, just download)
-  const result = await addAndDetect(url, title);
-  if (!result.success) throw new Error(result.error || 'Failed to add torrent');
-
-  return {
-    method: 'direct',
-    message: `Added to qBittorrent: ${result.name || title}`,
-    hash: result.hash,
-    name: result.name,
-  };
-}
 
 // ========== REQUESTS LOG ==========
 function getRequestsPath() {
@@ -866,266 +726,54 @@ app.post('/api/get', requireAuth, async (req, res) => {
     let { title, year, type, tmdbId, skipPlexCheck, tvMode, tvSeason, tvEpisode } = req.body;
     if (!title) return res.status(400).json({ error: 'Title required' });
 
-    const contentType = type || 'movie';
+    // Proxy to Media Manager's smart-grab — it handles search, scoring, disambiguation, Plex check, everything
+    const grabRes = await fetchWithTimeout(MANAGER_URL + '/api/smart-grab', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title, year, type, tmdbId, skipPlexCheck,
+        tvMode, tvSeason, tvEpisode,
+        preferences: config.preferences,
+        primaryIndexer: req.body.primaryIndexer || null,
+        exclusiveIndexer: !!req.body.primaryIndexer,
+      }),
+    }, 60000);
 
-    // Step 0a: Check if already in the pipeline queue
-    if (!skipPlexCheck) {
-      try {
-        const managerUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
-        const queueRes = await fetch(`${managerUrl}/api/pipeline/queue`, { signal: AbortSignal.timeout(3000) });
-        if (queueRes.ok) {
-          const queueData = await queueRes.json();
-          const jobs = (queueData.jobs || []).filter(j => j.status !== 'done' && j.status !== 'failed' && j.status !== 'cancelled');
-          
-          if (jobs.length) {
-            const normalize = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-            const reqTitle = normalize(title);
-            
-            // Build a label for what we're requesting to match against queue job names
-            let matchLabel;
-            if (contentType === 'tv' && tvMode === 'episode' && tvSeason && tvEpisode) {
-              // Episode-specific: match title + SxxExx
-              const sNum = String(tvSeason).padStart(2, '0');
-              const eNum = String(tvEpisode).padStart(2, '0');
-              matchLabel = `s${sNum}e${eNum}`;
-            } else if (contentType === 'tv' && tvMode === 'season' && tvSeason) {
-              // Season-specific: match title + Sxx (but not SxxExx — those are individual episodes)
-              const sNum = String(tvSeason).padStart(2, '0');
-              matchLabel = `s${sNum}`;
-            } else {
-              matchLabel = null; // Movie or full show — just match title
-            }
-            
-            for (const job of jobs) {
-              const jobName = normalize(job.name);
-              // Check if job name contains the requested title
-              if (!jobName.includes(reqTitle)) continue;
-              
-              if (contentType === 'movie') {
-                // Movie: title match is enough (with optional year check)
-                if (year && jobName.includes(String(year))) {
-                  return res.status(409).json({ error: 'already_in_queue', message: `Already in pipeline: ${job.name}` });
-                }
-                // No year in request — title match alone
-                if (!year) {
-                  return res.status(409).json({ error: 'already_in_queue', message: `Already in pipeline: ${job.name}` });
-                }
-              } else if (contentType === 'tv' && matchLabel) {
-                // TV with specific season/episode: must also match the SxxExx or Sxx pattern
-                if (jobName.includes(matchLabel)) {
-                  return res.status(409).json({ error: 'already_in_queue', message: `Already in pipeline: ${job.name}` });
-                }
-              } else if (contentType === 'tv' && tvMode === 'full') {
-                // Full show: any job with the title is a dup
-                return res.status(409).json({ error: 'already_in_queue', message: `Already in pipeline: ${job.name}` });
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.log('[get] Pipeline queue check failed (non-fatal):', e.message);
-      }
-    }
+    const grabData = await grabRes.json();
+    if (!grabRes.ok) return res.status(grabRes.status).json(grabData);
 
-    // Step 0b: Check if already in Plex (skip for TV season/episode/latest — those have their own logic)
-    if (!skipPlexCheck && (contentType === 'movie' || (contentType === 'tv' && tvMode === 'full'))) {
-      const plexResult = await plexSearch(title, contentType, year);
-      if (plexResult && plexResult.found) {
-        return res.status(409).json({
-          error: 'already_in_plex',
-          message: `Already in Plex: ${plexResult.title}${plexResult.year ? ` (${plexResult.year})` : ''}`,
-          plexMatch: plexResult,
-        });
-      }
-    }
-
-    // Build search query based on TV mode
-    let searchQuery;
-    let requestLabel = title;
-
-    if (contentType === 'tv' && tvMode) {
-      if (tvMode === 'full') {
-        searchQuery = `${title} complete series`;
-        requestLabel = `${title} (Complete Series)`;
-      } else if (tvMode === 'season' && tvSeason) {
-        const sNum = String(tvSeason).padStart(2, '0');
-        searchQuery = `${title} S${sNum}`;
-        requestLabel = `${title} Season ${tvSeason}`;
-      } else if (tvMode === 'episode' && tvSeason && tvEpisode) {
-        const sNum = String(tvSeason).padStart(2, '0');
-        const eNum = String(tvEpisode).padStart(2, '0');
-        searchQuery = `${title} S${sNum}E${eNum}`;
-        requestLabel = `${title} S${sNum}E${eNum}`;
-      } else if (tvMode === 'latest' && tmdbId) {
-        try {
-          const apiKey = config.tmdb.apiKey;
-          const showRes = await fetch(`https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${apiKey}`);
-          if (showRes.ok) {
-            const show = await showRes.json();
-            const lastEp = show.last_episode_to_air;
-            if (lastEp) {
-              const sNum = String(lastEp.season_number).padStart(2, '0');
-              const eNum = String(lastEp.episode_number).padStart(2, '0');
-              tvSeason = lastEp.season_number; // save for fallback
-              tvEpisode = lastEp.episode_number;
-              searchQuery = `${title} S${sNum}E${eNum}`;
-              requestLabel = `${title} S${sNum}E${eNum} (Latest)`;
-            } else {
-              const today = new Date().toISOString().slice(0, 10);
-              const airedSeasons = (show.seasons || [])
-                .filter(s => s.season_number > 0 && s.air_date && s.air_date <= today);
-              if (airedSeasons.length) {
-                const latest = airedSeasons[airedSeasons.length - 1];
-                const sNum = String(latest.season_number).padStart(2, '0');
-                searchQuery = `${title} S${sNum}`;
-                requestLabel = `${title} Season ${latest.season_number} (Latest)`;
-              } else {
-                searchQuery = title;
-                requestLabel = `${title} (Latest)`;
-              }
-            }
-          } else {
-            searchQuery = title;
-            requestLabel = `${title} (Latest)`;
-          }
-        } catch {
-          searchQuery = title;
-          requestLabel = `${title} (Latest)`;
-        }
-      } else if (tvMode === 'latest') {
-        searchQuery = title;
-        requestLabel = `${title} (Latest)`;
-      } else {
-        searchQuery = title;
-      }
-    } else {
-      searchQuery = year ? `${title} ${year}` : title;
-    }
-
-    // Step 0c: Direct magnet shortcut (from Top 20 or browse results)
-    if (req.body.magnetUrl && req.body.magnetUrl.startsWith('magnet:')) {
-      console.log('[get] Direct magnet provided, skipping search');
-      const directTorrent = {
-        title: req.body.torrentTitle || title,
-        downloadUrl: req.body.magnetUrl,
-        magnetUrl: req.body.magnetUrl,
-        size: req.body.torrentSize || 0,
-        seeders: req.body.torrentSeeders || 0,
-        indexer: req.body.torrentIndexer || 'direct',
-        categories: contentType === 'tv' ? [5000] : [2000],
-        _score: 999,
-      };
-      const result = await sendToMediaManager(directTorrent, directTorrent.title, contentType);
-      const requests = loadRequests();
-      const smsPhone = (req.body.smsPhone || '').replace(/\D/g, '');
-      const smsCarrier = req.body.smsCarrier || '';
-      const newReq = {
-        id: Date.now(), title: requestLabel, year, type: contentType,
-        torrent: directTorrent.title, size: directTorrent.size,
-        seeders: directTorrent.seeders, indexer: directTorrent.indexer,
-        quality: /2160p|4k/i.test(directTorrent.title) ? '4K' : /1080p/i.test(directTorrent.title) ? '1080p' : '720p',
-        method: result.method, status: 'sent', timestamp: new Date().toISOString(),
-        pushSubscription: req.body.pushSubscription || null,
-        smsPhone: smsPhone || null, smsCarrier: smsCarrier || null,
-      };
-      requests.unshift(newReq);
-      if (requests.length > 100) requests.length = 100;
-      saveRequests(requests);
-      return res.json({ success: true, message: result.message, torrent: { title: directTorrent.title, size: directTorrent.size, seeders: directTorrent.seeders, indexer: directTorrent.indexer } });
-    }
-
-    // Step 1: Search Prowlarr for torrents
-    let torrents = await prowlarrSearch(searchQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
-    console.log(`[get] Searching: "${searchQuery}" => ${torrents.length} results`);
-
-    // Fallback searches for TV when primary query finds nothing
-    if (contentType === 'tv' && !torrents.length) {
-      if (tvMode === 'episode' && tvSeason && tvEpisode) {
-        // Episode not found — fall back to season pack
-        const sNum = String(tvSeason).padStart(2, '0');
-        const fallbackQuery = `${title} S${sNum}`;
-        console.log(`[get] No episode torrent found, trying season pack: "${fallbackQuery}"`);
-        torrents = await prowlarrSearch(fallbackQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
-        if (torrents.length) {
-          // Switch to season mode so selectBestTorrent picks a season pack
-          tvMode = 'season';
-          requestLabel += ' (via season pack)';
-        }
-      } else if (tvMode === 'latest' && tvSeason) {
-        // Latest episode not found — fall back to latest season
-        const sNum = String(tvSeason).padStart(2, '0');
-        const fallbackQuery = `${title} S${sNum}`;
-        console.log(`[get] No latest episode found, trying season: "${fallbackQuery}"`);
-        torrents = await prowlarrSearch(fallbackQuery, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
-      } else if (tvMode === 'full') {
-        const alt1 = await prowlarrSearch(`${title} complete`, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
-        torrents.push(...alt1);
-        if (!torrents.length) {
-          const alt2 = await prowlarrSearch(`${title} all seasons`, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
-          torrents.push(...alt2);
-        }
-      }
-    }
-
-    // If still nothing, try just the show name as a last resort
-    if (contentType === 'tv' && !torrents.length) {
-      console.log(`[get] Trying bare title: "${title}"`);
-      torrents = await prowlarrSearch(title, 'search', req.body.primaryIndexer || null, !!req.body.primaryIndexer);
-    }
-
-    if (!torrents.length) return res.status(404).json({ error: 'No torrents found', query: searchQuery });
-
-    // Step 2: Auto-select best torrent
-    // For full show, prefer larger packs; for season, prefer season packs; for episode, prefer single eps
-    const best = selectBestTorrent(torrents, contentType, config.preferences, tvMode, tvSeason);
-    console.log(`[get] Best: ${best ? best.title + " score:" + best._score + " seeders:" + best.seeders : "NONE"}`);
-    if (!best) return res.status(404).json({ error: 'No suitable torrents found', query: searchQuery });
-
-    // Step 3: Send to pipeline
-    const result = await sendToMediaManager(best, best.title, contentType);
-
-    // Get current highest pipeline job ID so we can ignore older completed jobs
-    let minPipelineJobId = 0;
-    try {
-      const mmUrl = process.env.MANAGER_URL || 'http://127.0.0.1:9876';
-      const statusRes = await fetch(`${mmUrl}/status`, { signal: AbortSignal.timeout(2000) });
-      if (statusRes.ok) {
-        const statusData = await statusRes.json();
-        const jobs = statusData.jobs || [];
-        if (jobs.length) minPipelineJobId = Math.max(...jobs.map(j => j.id || 0));
-      }
-    } catch {}
-
-    // Step 4: Log the request
+    // Log the request locally
     const requests = loadRequests();
     const pushSubscription = req.body.pushSubscription || null;
-    const smsPhone = (req.body.smsPhone || '').replace(/\D/g, '');
+    const smsPhone = (req.body.smsPhone || '').replace(/\\D/g, '');
     const smsCarrier = req.body.smsCarrier || '';
+    const contentType = type || 'movie';
+    const requestLabel = grabData.requestLabel || title;
+    const best = grabData.torrent || {};
+
     const newRequest = {
       id: Date.now(),
       title: requestLabel, year, type: contentType,
-      tvMode: tvMode || null,
-      tvSeason: tvSeason || null,
-      tvEpisode: tvEpisode || null,
-      torrent: best.title,
-      size: best.size,
-      seeders: best.seeders,
-      indexer: best.indexer,
-      quality: /2160p|4k/i.test(best.title) ? '4K' : /1080p/i.test(best.title) ? '1080p' : /720p/i.test(best.title) ? '720p' : 'Unknown',
-      method: result.method,
+      tvMode: grabData.tvMode || tvMode || null,
+      tvSeason: grabData.tvSeason || tvSeason || null,
+      tvEpisode: grabData.tvEpisode || tvEpisode || null,
+      torrent: best.title || title,
+      size: best.size || 0,
+      seeders: best.seeders || 0,
+      indexer: best.indexer || '',
+      quality: /2160p|4k/i.test(best.title || '') ? '4K' : /1080p/i.test(best.title || '') ? '1080p' : /720p/i.test(best.title || '') ? '720p' : 'Unknown',
+      method: 'media-manager',
       status: 'sent',
       timestamp: new Date().toISOString(),
-      minPipelineJobId,
+      minPipelineJobId: grabData.minPipelineJobId || 0,
       pushSubscription,
       smsPhone: smsPhone || null,
       smsCarrier: smsCarrier || null,
     };
-    // Remove any existing entry for the same item to avoid duplicates on re-grab
+
     const deduped = requests.filter(r => {
-      // Remove same title/episode (re-grab)
-      const sameItem = r.title === requestLabel && r.tvMode === (tvMode || null) &&
-        r.tvSeason === (tvSeason || null) && r.tvEpisode === (tvEpisode || null);
-      // Also remove same phone + same title (rotated push key cleanup)
+      const sameItem = r.title === requestLabel && r.tvMode === (grabData.tvMode || tvMode || null) &&
+        r.tvSeason === (grabData.tvSeason || tvSeason || null) && r.tvEpisode === (grabData.tvEpisode || tvEpisode || null);
       const samePhoneAndItem = smsPhone && r.smsPhone === smsPhone && r.title === requestLabel;
       return !sameItem && !samePhoneAndItem;
     });
@@ -1133,26 +781,12 @@ app.post('/api/get', requireAuth, async (req, res) => {
     if (deduped.length > 100) deduped.length = 100;
     saveRequests(deduped);
 
-    res.json({
-      success: true,
-      message: result.message,
-      torrent: {
-        title: best.title,
-        size: best.size,
-        seeders: best.seeders,
-        indexer: best.indexer,
-        score: best._score,
-      }
-    });
+    res.json({ success: true, message: grabData.message, torrent: best });
   } catch (e) {
     console.error('[get] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
-
-// View recent requests — enriched with live pipeline status + ETA to Plex
-// Track when each request entered its current pipeline step
-const stepStartTimes = {}; // { requestId: { step: 'transferring', startedAt: timestamp, totalEstimate: seconds } }
 
 // ========== TOP 20 (proxy to media-manager) ==========
 app.get('/api/top/indexers', requireAuth, async (req, res) => {
