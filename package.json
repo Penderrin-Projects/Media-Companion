@@ -1,7 +1,7 @@
 {
   "name": "media-companion-docker",
   "version": "2.0.0",
-  "description": "Media Companion — mobile-friendly PWA frontend for Media Manager Server",
+  "description": "Media Companion \u2014 mobile-friendly PWA frontend for Media Manager Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +9,7 @@
   "dependencies": {
     "express": "^4.18.2",
     "http-proxy-middleware": "^3.0.0",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "nodemailer": "^6.9.0"
   }
 }
